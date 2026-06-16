@@ -1,0 +1,179 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    IssueBuddy Revit Add-in
+    ─────────────────────────────────────────────────────────────────────
+    TFM → Revit version mapping
+      net48          →  Revit 2023 / 2024   (.NET Framework 4.8)
+      net8-windows   →  Revit 2025 / 2026   (.NET 8, Win desktop)
+      net8-windows   →  Revit 2027          (.NET 8, Win desktop)
+
+    NOTE ON NET10:
+      "net10-windows" is intentionally NOT used here.
+      Older MSBuild / Visual Studio versions parse "net10" as
+      ".NETFramework v1.0" and fail with a missing reference-assembly
+      error.  Revit 2027 ships with the .NET 8 runtime, so net8-windows
+      is the correct and sufficient target.  Re-introduce net10-windows
+      only once VS 2022 17.12+ (with .NET 10 SDK) is your baseline and
+      Autodesk confirms a .NET 10 host.
+    ─────────────────────────────────────────────────────────────────────
+  -->
+
+  <PropertyGroup>
+    <TargetFrameworks>net48;net8-windows</TargetFrameworks>
+    <DebugEngines>{351668CC-8477-4fbf-BFE3-5F1006E4DB1F}</DebugEngines>
+
+    <AssemblyName>IssueBuddy</AssemblyName>
+    <RootNamespace>IssueBuddy</RootNamespace>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Company>David Veld</Company>
+    <Authors>David Veld</Authors>
+    <Description>IssueBuddy Tools Revit Add-in</Description>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <!-- Never copy Revit assemblies to output -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+	  <UseWPF>true</UseWPF>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+
+  </PropertyGroup>
+
+  <!-- ══════════════════════════════════════════
+       net48  →  Revit 2023 & 2024
+       Adjust RevitApiPath to your local install.
+  ══════════════════════════════════════════ -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net48'">
+    <DefineConstants>REVIT2023;REVIT2024</DefineConstants>
+    <RevitApiPath>C:\Program Files\Autodesk\Revit 2024</RevitApiPath>
+    <OutputPath>bin\$(Configuration)\Revit2023-2024\</OutputPath>
+	  
+  </PropertyGroup>
+
+  <!-- ══════════════════════════════════════════
+       net8-windows  →  Revit 2025, 2026 & 2027
+  ══════════════════════════════════════════ -->
+	<PropertyGroup Condition="'$(TargetFramework)' == 'net8-windows'">
+		<DefineConstants>REVIT2025;REVIT2026;REVIT2027</DefineConstants>
+		<RevitApiPath>C:\Program Files\Autodesk\Revit 2026</RevitApiPath>
+		<OutputPath>bin\$(Configuration)\Revit2025-2027\</OutputPath>
+		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+		<!--
+      UseWPF instructs the .NET 8 Windows SDK to automatically reference
+      PresentationCore, PresentationFramework, and WindowsBase.
+      In net48 these arrive via the full framework automatically.
+      In net8-windows they must be opted in explicitly — without this,
+      BitmapImage and any other WPF type (including those inside
+      RevitAPIUI) will fail to resolve at compile time.
+    -->
+		<UseWPF>true</UseWPF>
+	</PropertyGroup>
+
+  <!-- ══════════════════════════════════════════
+       Revit API References  (Private=false → never copied to output)
+  ══════════════════════════════════════════ -->
+  <ItemGroup>
+    <Reference Include="RevitAPI">
+      <HintPath>$(RevitApiPath)\RevitAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="RevitAPIUI">
+      <HintPath>$(RevitApiPath)\RevitAPIUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+
+  <!-- ══════════════════════════════════════════
+       Embed /img as assembly resources
+  ══════════════════════════════════════════ -->
+  <ItemGroup>
+    <Resource Include="img\**\*" />
+    <EmbeddedResource Include="img\**\*" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Remove="img\NEWICON1024.png" />
+    <EmbeddedResource Remove="img\packmodel.png" />
+    <EmbeddedResource Remove="img\packmodel16.png" />
+    <EmbeddedResource Remove="img\packmodel500.png" />
+    <EmbeddedResource Remove="img\pdfsplitter.png" />
+    <EmbeddedResource Remove="img\pdfsplitter16.png" />
+    <EmbeddedResource Remove="img\pdfsplitter500.png" />
+    <EmbeddedResource Remove="img\revset.png" />
+    <EmbeddedResource Remove="img\revset16.png" />
+    <EmbeddedResource Remove="img\revset500.png" />
+    <EmbeddedResource Remove="img\revviewer.png" />
+    <EmbeddedResource Remove="img\revviewer16.png" />
+    <EmbeddedResource Remove="img\revviewer500.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Remove="FileNameTemplates.xml" />
+    <None Remove="IssueBuddy24-.addin" />
+    <None Remove="IssueBuddy25+.addin" />
+    <None Remove="ReadMe - issueTools.pdf" />
+    <None Remove="settings.ini" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="FileNameTemplates.xml">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="img\packmodel.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="img\packmodel16.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="img\packmodel500.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="img\pdfsplitter.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="img\pdfsplitter16.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="img\pdfsplitter500.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="img\revset.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="img\revset16.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="img\revset500.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="img\revviewer.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="img\revviewer16.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="img\revviewer500.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="IssueBuddy24-.addin">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="IssueBuddy25+.addin">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="settings.ini">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+	  
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="PDFsharp" Version="6.2.4" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="Issue Buddy Tools.docx">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

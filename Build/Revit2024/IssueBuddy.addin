@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  IssueBuddy.addin – Revit 2024  (net48)
+  Deploy to: %AppData%\Autodesk\Revit\Addins\2024\
+  Place IssueBuddy.dll in the same folder (or set <Assembly> to the full path).
+-->
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>IssueBuddy</Name>
+    <Assembly>IssueBuddy.dll</Assembly>
+    <FullClassName>IssueBuddy.IssueBuddy</FullClassName>
+    <ClientId>34d5450f-4c1b-43b0-beff-833895354011</ClientId>
+    <VendorId>YOURCOMPANY</VendorId>
+    <VendorDescription>Your Company Name, www.yourcompany.com</VendorDescription>
+  </AddIn>
+</RevitAddIns>

@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.5.11801.241 oobstable
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "IssueBuddy", "IssueBuddy.csproj", "{ADC66AC2-9391-BEAF-C457-8F1DD7E93D81}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{ADC66AC2-9391-BEAF-C457-8F1DD7E93D81}.Debug|x64.ActiveCfg = Debug|x64
+		{ADC66AC2-9391-BEAF-C457-8F1DD7E93D81}.Debug|x64.Build.0 = Debug|x64
+		{ADC66AC2-9391-BEAF-C457-8F1DD7E93D81}.Release|x64.ActiveCfg = Release|x64
+		{ADC66AC2-9391-BEAF-C457-8F1DD7E93D81}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {53B3257A-EB2F-4157-B941-6E4C0A354252}
+	EndGlobalSection
+EndGlobal

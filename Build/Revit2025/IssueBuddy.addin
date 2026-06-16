@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  IssueBuddy.addin – Revit 2025  (net8-windows)
+  Deploy to: %AppData%\Autodesk\Revit\Addins\2025\
+  Place IssueBuddy.dll in the same folder (or set <Assembly> to the full path).
+-->
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>IssueBuddy</Name>
+    <Assembly>IssueBuddy.dll</Assembly>
+    <FullClassName>IssueBuddy.IssueBuddy</FullClassName>
+    <ClientId>31b26355-aa14-4b21-861e-8f962e40994c</ClientId>
+    <VendorId>YOURCOMPANY</VendorId>
+    <VendorDescription>Your Company Name, www.yourcompany.com</VendorDescription>
+  </AddIn>
+</RevitAddIns>

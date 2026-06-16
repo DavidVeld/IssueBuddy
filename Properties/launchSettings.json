@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "IssueBuddy": {
+      "commandName": "Project"
+    },
+    "Revit_2025": {
+      "commandName": "Executable",
+      "executablePath": "C:\\Program Files\\Autodesk\\Revit 2025\\Revit.exe",
+      "debugEngines": "managed-dotnet"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIn>
+	<AddIn Type="Application">
+		<Name>IssueBuddy</Name>
+		<Assembly>[Path]\IssueBuddy.dll</Assembly>
+		<FullClassName>IssueBuddy.IssueBuddyApp</FullClassName>
+		<ClientId>a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d</ClientId>
+		<VendorId>DavidVeld</VendorId>
+		<VendorDescription>DavidVeld / DavidVeld, https://sites.google.com/view/david-veld</VendorDescription>
+	</AddIn>
+</RevitAddIn>
