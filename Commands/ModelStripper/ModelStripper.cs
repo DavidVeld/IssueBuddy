@@ -84,15 +84,50 @@ namespace IssueBuddy
                 return Result.Cancelled;
             }
 
-            // ── Guard: unsaved workshared model ──────────────────────────────────
-            if (doc.IsWorkshared && string.IsNullOrEmpty(doc.PathName))
+            // ── Guard: model has never been saved ────────────────────────────────
+            // With no path on disk there is no original for the tool to protect:
+            // Revit's Save() throws ("a file path must already be set"), and the
+            // live session would become the stripped copy — so the in-progress work
+            // would be stripped rather than a copy of it.
+            if (string.IsNullOrEmpty(doc.PathName))
             {
                 MessageBox.Show(
-                    "This workshared model has never been saved.\n\n" +
-                    "Please save (and sync) the file before running Model Stripper.",
+                    doc.IsWorkshared
+                        ? "This workshared model has never been saved.\n\n" +
+                          "Please save (and sync) the file before running Model Stripper."
+                        : "This model has never been saved.\n\n" +
+                          "Model Stripper works by saving a copy of the file and stripping " +
+                          "that copy, so it needs the original to exist on disk first.\n\n" +
+                          "Save the model (File → Save As), then run the tool again.",
                     "Unsaved Model", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return Result.Cancelled;
             }
+
+            // ── Guard: the active view must anchor a 3D view ─────────────────────
+            // Revit refuses any delete that would leave the project with no open
+            // views ("Deleting all open views in a project is not allowed"), and a
+            // model with no views is useless to whoever receives it. So the tool
+            // only runs from a 3D view, or from a sheet with a 3D view placed on
+            // it — that 3D view becomes the anchor and is never deleted.
+            if (!TryResolveAnchor(doc, out ElementId anchor3DId, out ElementId anchorSheetId))
+            {
+                MessageBox.Show(
+                    "Model Stripper needs a 3D view to keep in the stripped model.\n\n" +
+                    "Please make one of these the active view and run the tool again:\n" +
+                    "  • a 3D view, or\n" +
+                    "  • a sheet with a 3D view placed on it\n\n" +
+                    "Everything you tick in the dialog is still removed — the 3D view " +
+                    "(and its sheet, if you launch from one) is the only thing kept back.",
+                    "Open a 3D View First", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return Result.Cancelled;
+            }
+
+            // UniqueIds survive SaveAs, ElementIds are only guaranteed within a
+            // document — so carry the anchor across to the copy by UniqueId.
+            string anchor3DUniqueId = doc.GetElement(anchor3DId).UniqueId;
+            string? anchorSheetUniqueId = anchorSheetId == ElementId.InvalidElementId
+                ? null
+                : doc.GetElement(anchorSheetId).UniqueId;
 
             // ── Guard: check for elements owned by other users ───────────────────
             if (doc.IsWorkshared)
@@ -225,8 +260,41 @@ namespace IssueBuddy
                 return Result.Failed;
             }
 
+            // ── Re-establish the anchor in the COPY ───────────────────────────
+            // The copy comes up with whatever views Revit restores from the saved
+            // state, which is not necessarily the view we validated above. Look the
+            // anchor up by UniqueId, make it active, and close every other open
+            // view — that way the delete set can never cover all open views.
+            ElementId copyAnchor3DId = FindByUniqueId(docToStrip, anchor3DUniqueId);
+            ElementId copyAnchorSheetId = FindByUniqueId(docToStrip, anchorSheetUniqueId);
+
+            if (copyAnchor3DId == ElementId.InvalidElementId)
+            {
+                // Fall back to any 3D view in the copy rather than strip blind.
+                copyAnchor3DId = new FilteredElementCollector(docToStrip)
+                    .OfClass(typeof(View3D))
+                    .Cast<View3D>()
+                    .Where(v => !v.IsTemplate)
+                    .Select(v => v.Id)
+                    .FirstOrDefault() ?? ElementId.InvalidElementId;
+                copyAnchorSheetId = ElementId.InvalidElementId;
+            }
+
+            if (copyAnchor3DId == ElementId.InvalidElementId)
+            {
+                MessageBox.Show(
+                    "The saved copy contains no 3D view to keep, so stripping was skipped.\n\n" +
+                    "An unstripped copy has been created at:\n" + newRevFilPath + "\n\n" +
+                    "Nothing was deleted.",
+                    "Nothing Stripped", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return Result.Cancelled;
+            }
+
+            IsolateAnchorView(uidocNew,
+                copyAnchorSheetId != ElementId.InvalidElementId ? copyAnchorSheetId : copyAnchor3DId);
+
             // ── Strip the copy ────────────────────────────────────────────────
-            StripAllViews(uidocNew);
+            StripAllViews(uidocNew, copyAnchor3DId, copyAnchorSheetId);
 
             if (_window.chk_UnlinkRvt.IsChecked == true)
                 RemoveTheLinks(uidocNew);
@@ -377,10 +445,120 @@ namespace IssueBuddy
         }
 
         // ════════════════════════════════════════════════════════════════════════
+        // Resolve the anchor — the 3D view that must survive the strip.
+        //
+        // Valid starting points are a 3D view, or a sheet with a 3D view placed on
+        // it. Returns false when the active view is neither, in which case the tool
+        // must not run: without an anchor the strip could empty the model of views.
+        // ════════════════════════════════════════════════════════════════════════
+        private static bool TryResolveAnchor(Document doc, out ElementId threeDViewId, out ElementId sheetId)
+        {
+            threeDViewId = ElementId.InvalidElementId;
+            sheetId = ElementId.InvalidElementId;
+
+            var active = doc.ActiveView;
+            if (active == null || active.IsTemplate)
+                return false;
+
+            if (active.ViewType == ViewType.ThreeD)
+            {
+                threeDViewId = active.Id;
+                return true;
+            }
+
+            if (active.ViewType == ViewType.DrawingSheet)
+            {
+                var placed = new FilteredElementCollector(doc)
+                    .OfClass(typeof(Viewport))
+                    .Cast<Viewport>()
+                    .Where(vp => vp.SheetId == active.Id)
+                    .Select(vp => doc.GetElement(vp.ViewId) as Autodesk.Revit.DB.View)
+                    .FirstOrDefault(v => v != null && v.ViewType == ViewType.ThreeD);
+
+                if (placed != null)
+                {
+                    threeDViewId = placed.Id;
+                    sheetId = active.Id;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // Look an element up by UniqueId. Returns InvalidElementId when absent.
+        private static ElementId FindByUniqueId(Document doc, string? uniqueId)
+        {
+            if (string.IsNullOrEmpty(uniqueId))
+                return ElementId.InvalidElementId;
+
+            try
+            {
+                return doc.GetElement(uniqueId)?.Id ?? ElementId.InvalidElementId;
+            }
+            catch
+            {
+                return ElementId.InvalidElementId;
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════════════
+        // Leave exactly one view open in the copy — the anchor.
+        //
+        // Revit throws "Deleting all open views in a project is not allowed" when a
+        // delete would close every open view. Whatever tabs Revit restored when it
+        // reopened the copy, closing them down to the anchor removes that risk.
+        // ════════════════════════════════════════════════════════════════════════
+        private static void IsolateAnchorView(UIDocument uidoc, ElementId anchorId)
+        {
+            try
+            {
+                if (!(uidoc.Document.GetElement(anchorId) is Autodesk.Revit.DB.View anchor))
+                    return;
+
+                if (uidoc.ActiveView == null || uidoc.ActiveView.Id != anchor.Id)
+                    uidoc.ActiveView = anchor;
+
+                foreach (var uiView in uidoc.GetOpenUIViews())
+                {
+                    if (uiView.ViewId != anchor.Id)
+                        uiView.Close();
+                }
+            }
+            catch
+            {
+                // Not fatal — the protected set in StripAllViews still keeps the
+                // anchor alive, this is only here to keep Revit's own guard quiet.
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════════════
+        // Add a view to the protected set, walking up the dependency chain.
+        // A dependent view is deleted along with its primary, so protecting a
+        // dependent means protecting every primary above it too.
+        // ════════════════════════════════════════════════════════════════════════
+        private static void ProtectView(Document doc, ElementId? id, HashSet<ElementId> protectedIds)
+        {
+            if (id == null || id == ElementId.InvalidElementId) return;
+            if (!protectedIds.Add(id)) return;
+
+            if (doc.GetElement(id) is Autodesk.Revit.DB.View view)
+            {
+                ElementId primary = view.GetPrimaryViewId();
+                if (primary != null && primary != ElementId.InvalidElementId)
+                    ProtectView(doc, primary, protectedIds);
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════════════
         // Strip views / sheets / legends / schedules / templates / groups
         // Operates on the COPY document passed in — never the original.
+        //
+        // anchor3DId is the 3D view that must survive; anchorSheetId is the sheet
+        // it sits on when the tool was launched from a sheet, otherwise
+        // InvalidElementId. Neither is ever deleted.
         // ════════════════════════════════════════════════════════════════════════
-        private void StripAllViews(UIDocument uidoc)
+        private void StripAllViews(UIDocument uidoc, ElementId anchor3DId, ElementId anchorSheetId)
         {
             Document doc = uidoc.Document;
 
@@ -389,27 +567,34 @@ namespace IssueBuddy
                 .Cast<Autodesk.Revit.DB.View>()
                 .ToList();
 
-            long activeId = doc.ActiveView.Id.Value;
+            // ── Build the protected set ───────────────────────────────────────
+            // Nothing in here is deleted, whatever the user ticked. The anchor 3D
+            // view guarantees the stripped model always has at least one view.
+            var protectedIds = new HashSet<ElementId>();
+            ProtectView(doc, anchor3DId, protectedIds);
+            ProtectView(doc, doc.ActiveView?.Id, protectedIds);
 
-            // Protect views on the current active sheet (if launched from a sheet)
-            var viewsToSave = new HashSet<ElementId>();
-            if (doc.ActiveView.ViewType == ViewType.DrawingSheet)
+            if (anchorSheetId != ElementId.InvalidElementId)
             {
-                var viewportIds = new FilteredElementCollector(doc)
+                // Keep the launch sheet and everything placed on it, so the sheet
+                // does not come out of the strip as an empty title block.
+                ProtectView(doc, anchorSheetId, protectedIds);
+
+                var placedIds = new FilteredElementCollector(doc)
                     .OfClass(typeof(Viewport))
                     .Cast<Viewport>()
-                    .Where(vp => vp.SheetId == doc.ActiveView.Id)
+                    .Where(vp => vp.SheetId == anchorSheetId)
                     .Select(vp => vp.ViewId);
-                foreach (var id in viewportIds)
-                    viewsToSave.Add(id);
+
+                foreach (var id in placedIds)
+                    ProtectView(doc, id, protectedIds);
             }
 
             var toDelete = new List<ElementId>();
 
             foreach (var view in allViews)
             {
-                if (view.Id.Value == activeId) continue;
-                if (viewsToSave.Contains(view.Id)) continue;
+                if (protectedIds.Contains(view.Id)) continue;
 
                 if (!view.IsTemplate)
                 {
@@ -446,14 +631,34 @@ namespace IssueBuddy
                 }
             }
 
+            // ── Final safety net ──────────────────────────────────────────────
+            // ExceptWith is the belt to the protected-set braces: even if a future
+            // change adds an id twice or misses a guard above, nothing protected can
+            // reach doc.Delete.
+            var deleteSet = new HashSet<ElementId>(toDelete);
+            deleteSet.ExceptWith(protectedIds);
+
+            bool anchorSurvives = allViews.Any(v => v.Id == anchor3DId)
+                                  && !deleteSet.Contains(anchor3DId);
+
+            if (!anchorSurvives)
+            {
+                MessageBox.Show(
+                    "Stripping was abandoned because the 3D view that should be kept " +
+                    "could no longer be found in the copy.\n\n" +
+                    "No views have been deleted — the copy has been left unstripped.",
+                    "Strip Abandoned", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
             try
             {
                 using (var t = new Transaction(doc, "Strip Views"))
                 {
                     t.Start();
 
-                    if (toDelete.Count > 0)
-                        doc.Delete(toDelete);
+                    if (deleteSet.Count > 0)
+                        doc.Delete(deleteSet.ToList());
 
                     if (_window.chk_UngroupModels.IsChecked == true)
                     {

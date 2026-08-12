@@ -113,11 +113,18 @@
     <None Remove="FileNameTemplates.xml" />
     <None Remove="IssueBuddy24-.addin" />
     <None Remove="IssueBuddy25+.addin" />
-    <None Remove="ReadMe - issueTools.pdf" />
     <None Remove="settings.ini" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="FileNameTemplates.xml">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <!--
+      F1 contextual help target. Must sit beside IssueBuddy.dll — IssueBuddyApp
+      resolves it relative to the assembly location, and the file name is what
+      the Autodesk App Store listing refers to, so do not rename it.
+    -->
+    <Content Include="ReadMe - issueTools.pdf">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
     <Content Include="img\packmodel.png">

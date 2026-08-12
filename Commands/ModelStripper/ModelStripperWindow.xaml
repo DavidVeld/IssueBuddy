@@ -138,7 +138,10 @@
                 <CheckBox x:Name="chk_StripViews"         Content="Views"                       IsChecked="True"/>
                 <CheckBox x:Name="chk_StripSheets"        Content="Sheets"                      IsChecked="True"/>
                 <CheckBox x:Name="chk_StripLegends"       Content="Legends"                     IsChecked="True"/>
-                <CheckBox x:Name="chk_StripSchedules"     Content="Schedules"                   IsChecked="True"/>
+                <!-- Off by default: stripping schedules also takes the revisions
+                     with it, which is rarely what you want when issuing. -->
+                <CheckBox x:Name="chk_StripSchedules"     Content="Schedules and revisions"     IsChecked="False"
+                          ToolTip="Removes schedules from the stripped model. This also removes the revision history, so it is off by default."/>
                 <CheckBox x:Name="chk_StripViewTemplates" Content="View Templates"              IsChecked="True"/>
                 <CheckBox x:Name="chk_UnlinkRvt"          Content="Unload all Revit Links"      IsChecked="True"/>
                 <CheckBox x:Name="chk_UngroupModels"      Content="Ungroup all model groups"    IsChecked="True"/>

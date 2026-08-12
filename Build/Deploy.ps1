@@ -30,12 +30,24 @@ param(
 $ErrorActionPreference = "Stop"
 
 # ── Framework map ──────────────────────────────────────────────────────────────
+# SubPath is what MSBuild appends to OutputPath: the target framework, plus the
+# runtime identifier for net8-windows (which sets RuntimeIdentifier=win-x64).
 $frameworkMap = @{
-    "2023" = @{ Framework = "net48";         BuildFolder = "Revit2023-2024"  }
-    "2024" = @{ Framework = "net48";         BuildFolder = "Revit2023-2024"  }
-    "2025" = @{ Framework = "net8-windows";  BuildFolder = "Revit2025-2027"  }
-    "2026" = @{ Framework = "net8-windows";  BuildFolder = "Revit2025-2027"  }
-    "2027" = @{ Framework = "net8-windows";  BuildFolder = "Revit2025-2027"  }
+    "2023" = @{ Framework = "net48";         BuildFolder = "Revit2023-2024";  SubPath = "net48"                }
+    "2024" = @{ Framework = "net48";         BuildFolder = "Revit2023-2024";  SubPath = "net48"                }
+    "2025" = @{ Framework = "net8-windows";  BuildFolder = "Revit2025-2027";  SubPath = "net8-windows\win-x64" }
+    "2026" = @{ Framework = "net8-windows";  BuildFolder = "Revit2025-2027";  SubPath = "net8-windows\win-x64" }
+    "2027" = @{ Framework = "net8-windows";  BuildFolder = "Revit2025-2027";  SubPath = "net8-windows\win-x64" }
+}
+
+# Resolves the build output folder, tolerating either layout: with the framework
+# subfolder MSBuild appends by default, or flattened if that is ever disabled.
+function Resolve-BuildDir {
+    param([string]$Root, [string]$SubPath)
+
+    $nested = Join-Path $Root $SubPath
+    if (Test-Path (Join-Path $nested "IssueBuddy.dll")) { return $nested }
+    return $Root
 }
 
 $versions = if ($RevitVersion -eq "All") { $frameworkMap.Keys | Sort-Object } else { @($RevitVersion) }
@@ -48,7 +60,11 @@ foreach ($ver in $versions) {
     $buildFolder = $info.BuildFolder
     $framework   = $info.Framework
 
-    $srcDll    = Join-Path $projectRoot "bin\$Configuration\$buildFolder\IssueBuddy.dll"
+    $buildRoot = Join-Path $projectRoot "bin\$Configuration\$buildFolder"
+    $srcDir    = Resolve-BuildDir -Root $buildRoot -SubPath $info.SubPath
+
+    $srcDll    = Join-Path $srcDir "IssueBuddy.dll"
+    $srcHelp   = Join-Path $srcDir "ReadMe - issueTools.pdf"
     $srcAddin  = Join-Path $projectRoot "Build\Revit$ver\IssueBuddy.addin"
     $destDir   = Join-Path $appData "Autodesk\Revit\Addins\$ver"
 
@@ -66,6 +82,14 @@ foreach ($ver in $versions) {
 
     Copy-Item $srcDll   -Destination $destDir -Force
     Copy-Item $srcAddin -Destination $destDir -Force
+
+    # F1 contextual help resolves the PDF relative to the deployed DLL, so it
+    # has to travel with it — without this, F1 silently does nothing.
+    if (Test-Path $srcHelp) {
+        Copy-Item $srcHelp -Destination $destDir -Force
+    } else {
+        Write-Warning "  Help PDF not found: $srcHelp  (F1 help will be unavailable)"
+    }
 
     Write-Host "  ✓ Deployed to $destDir" -ForegroundColor Green
 }

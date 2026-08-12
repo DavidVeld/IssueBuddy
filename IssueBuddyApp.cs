@@ -25,12 +25,19 @@ namespace IssueBuddy
         private const string PanelName = "Issue Buddy";
         private const string ImageSubFolder = "img";
 
+        // The F1 help document, shipped alongside the assembly. The name is fixed
+        // by the Autodesk App Store listing — see the csproj Content entry.
+        private const string HelpFileName = "ReadMe - issueTools.pdf";
+
         // ─── Cached paths (resolved once) ─────────────────────────────────────
         private static readonly string AssemblyPath =
             Assembly.GetExecutingAssembly().Location;
 
         private static readonly string AssemblyDir =
             Path.GetDirectoryName(AssemblyPath) ?? string.Empty;
+
+        private static readonly string HelpFilePath =
+            Path.Combine(AssemblyDir, HelpFileName);
 
         // ─────────────────────────────────────────────────────────────────────
         // OnStartup
@@ -43,20 +50,38 @@ namespace IssueBuddy
 
                 // Core buttons. Each loads its icon safely — a missing image
                 // leaves the button without an icon rather than failing startup.
+                // Every button gets a tooltip, a long description, and F1
+                // contextual help pointing at the shipped ReadMe PDF.
 
                 AddButton(panel, "CreatePrintSet", "CreatePrintSet",
-                    "IssueBuddy.CreatePrintSet", "revset.png");
+                    "IssueBuddy.CreatePrintSet", "revset.png",
+                    "Create a print set from the sheets on selected revisions.",
+                    "Builds a named Revit print set (view/sheet set) from every sheet " +
+                    "carrying the revision(s) you pick, so an issue can be printed or " +
+                    "exported without hand-picking sheets. Existing set names are " +
+                    "checked before the set is created.");
 
                 AddButton(panel, "PDFSplitter", "PDFSplitter",
-                    "IssueBuddy.PDFSplitterCommand", "pdfsplitter.png");
+                    "IssueBuddy.PDFSplitterCommand", "pdfsplitter.png",
+                    "Split a multi-page PDF into one file per sheet.",
+                    "Splits a printed PDF into single-sheet files and names each one " +
+                    "from a template you build out of Revit sheet and Project " +
+                    "Information parameters. Templates are saved for reuse.");
 
                 AddButton(panel, "ModelStripper", "ModelStripper",
-                    "IssueBuddy.ModelStripper", "packmodel.png");
+                    "IssueBuddy.ModelStripper", "packmodel.png",
+                    "Save a stripped copy of the model for issue.",
+                    "Saves a copy of the current model, then removes the views, sheets, " +
+                    "legends, schedules and view templates you tick, optionally " +
+                    "unloading Revit links and ungrouping model groups. The original " +
+                    "model is never modified. Run it from a 3D view, or from a sheet " +
+                    "with a 3D view on it — that view is kept in the stripped copy.");
 
                 AddButton(panel, "RevisionViewer", "RevisionViewer",
-    "IssueBuddy.RevisionViewerCommand", "revviewer.png");
-
-
+                    "IssueBuddy.RevisionViewerCommand", "revviewer.png",
+                    "Review the sheet issue and revision history.",
+                    "Lists every sheet against its revisions so the issue history can " +
+                    "be checked in one place, and exports the table to CSV.");
 
 
 #if REVIT2025 || REVIT2026 || REVIT2027
@@ -113,7 +138,8 @@ namespace IssueBuddy
         }
 
         /// <summary>
-        /// Adds a push button to a panel and applies its icon if one loads.
+        /// Adds a push button to a panel, applies its icon if one loads, and wires
+        /// up the tooltip, long description and F1 contextual help.
         /// Never throws on a missing/bad image — the button is still created.
         /// </summary>
         private static PushButton AddButton(
@@ -122,11 +148,16 @@ namespace IssueBuddy
             string displayText,
             string commandClass,
             string imageFile,
-            string tooltip = null)
+            string? tooltip = null,
+            string? longDescription = null)
         {
             var data = new PushButtonData(internalName, displayText, AssemblyPath, commandClass);
             if (!string.IsNullOrEmpty(tooltip))
                 data.ToolTip = tooltip;
+
+            // Shown in the expanded tooltip, below the separator.
+            if (!string.IsNullOrEmpty(longDescription))
+                data.LongDescription = longDescription;
 
             var button = panel.AddItem(data) as PushButton;
 
@@ -134,7 +165,44 @@ namespace IssueBuddy
             if (button != null && image != null)
                 button.LargeImage = image;
 
+            if (button != null)
+                TrySetContextualHelp(button);
+
             return button;
+        }
+
+        /// <summary>
+        /// Attaches F1 contextual help to a button, opening the ReadMe PDF that
+        /// ships beside the assembly. Revit then shows the "Press F1 for more help"
+        /// line on the button's tooltip and launches the file when F1 is pressed.
+        ///
+        /// Optional feature: a missing PDF or an older API must not fail startup,
+        /// so failures are logged and the button is left without help rather than
+        /// advertising help that cannot open.
+        /// </summary>
+        private static void TrySetContextualHelp(PushButton button)
+        {
+            try
+            {
+                if (!File.Exists(HelpFilePath))
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[IssueBuddy] Help file not found: {HelpFilePath}");
+                    return;
+                }
+
+                // ContextualHelpType.Url covers local documents as well as web
+                // URLs — Revit shell-launches the path, so the PDF opens in the
+                // user's default reader.
+                button.SetContextualHelp(
+                    new ContextualHelp(ContextualHelpType.Url, HelpFilePath));
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[IssueBuddy] Failed to set contextual help on " +
+                    $"'{button.Name}': {ex.Message}");
+            }
         }
 
         /// <summary>
