@@ -6,8 +6,8 @@
         xmlns:local="clr-namespace:IssueBuddy"
         mc:Ignorable="d"
         Title="Model Stripper"
-        Height="550" Width="370"
-        MinHeight="550" MinWidth="370"
+        Height="650" Width="370"
+        MinHeight="650" MinWidth="370"
         ResizeMode="NoResize"
         FontFamily="Segoe UI"
         FontWeight="Light"
@@ -140,10 +140,18 @@
                 <CheckBox x:Name="chk_StripLegends"       Content="Legends"                     IsChecked="True"/>
                 <!-- Off by default: stripping schedules also takes the revisions
                      with it, which is rarely what you want when issuing. -->
-                <CheckBox x:Name="chk_StripSchedules"     Content="Schedules and revisions"     IsChecked="False"
+                <CheckBox x:Name="chk_StripSchedules"     Content="Schedules"     IsChecked="True"
                           ToolTip="Removes schedules from the stripped model. This also removes the revision history, so it is off by default."/>
                 <CheckBox x:Name="chk_StripViewTemplates" Content="View Templates"              IsChecked="True"/>
                 <CheckBox x:Name="chk_UnlinkRvt"          Content="Unload all Revit Links"      IsChecked="True"/>
+                <CheckBox x:Name="chk_UnlinkCad"          Content="CAD links and imports"       IsChecked="True"
+                          ToolTip="Removes DWG, DXF, DGN, SAT and SKP files, whether linked or imported."/>
+                <CheckBox x:Name="chk_RemoveImages"       Content="Images and PDFs"             IsChecked="True"
+                          ToolTip="Removes raster images (JPG, PNG, TIFF, BMP) and linked or imported PDFs."/>
+                <CheckBox x:Name="chk_RemovePointClouds"  Content="Point clouds"                IsChecked="True"
+                          ToolTip="Removes point cloud links (RCP, RCS)."/>
+                <CheckBox x:Name="chk_RemoveCoordModels"  Content="Coordination models"         IsChecked="True"
+                          ToolTip="Removes Navisworks coordination model links (NWD, NWC)."/>
                 <CheckBox x:Name="chk_UngroupModels"      Content="Ungroup all model groups"    IsChecked="True"/>
             </StackPanel>
         </GroupBox>

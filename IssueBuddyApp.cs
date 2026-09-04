@@ -58,15 +58,14 @@ namespace IssueBuddy
                     "Create a print set from the sheets on selected revisions.",
                     "Builds a named Revit print set (view/sheet set) from every sheet " +
                     "carrying the revision(s) you pick, so an issue can be printed or " +
-                    "exported without hand-picking sheets. Existing set names are " +
-                    "checked before the set is created.");
+                    "exported without hand-picking sheets.");
 
                 AddButton(panel, "PDFSplitter", "PDFSplitter",
                     "IssueBuddy.PDFSplitterCommand", "pdfsplitter.png",
                     "Split a multi-page PDF into one file per sheet.",
                     "Splits a printed PDF into single-sheet files and names each one " +
                     "from a template you build out of Revit sheet and Project " +
-                    "Information parameters. Templates are saved for reuse.");
+                    "Information parameters.");
 
                 AddButton(panel, "ModelStripper", "ModelStripper",
                     "IssueBuddy.ModelStripper", "packmodel.png",

@@ -5,6 +5,7 @@ using System.Text;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
+using IssueBuddy.Common;
 
 namespace IssueBuddy
 {
@@ -16,14 +17,20 @@ namespace IssueBuddy
     [Regeneration(RegenerationOption.Manual)]
     public class CreatePrintSetCommand : IExternalCommand
     {
+        private const string Title = "Print Set From Selection";
+
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
-            var uidoc = commandData.Application.ActiveUIDocument;
+            // ── Entry conditions ─────────────────────────────────────────────
+            // CommandAvailability normally hides the menu item outside a project,
+            // but it is only a visibility hint — the command is still reachable by
+            // other means, so the same checks are repeated here.
+            UIDocument? uidoc = CommandGuards.GetProjectUIDocument(
+                commandData, Title, requireModifiable: true);
+
             if (uidoc == null)
-            {
-                TaskDialog.Show("Print Set From Selection", "No active document.");
                 return Result.Cancelled;
-            }
+
             var doc = uidoc.Document;
 
             // 1. Harvest printable views and sheets from current selection.
@@ -39,7 +46,7 @@ namespace IssueBuddy
 
             if (selectedViews.Count == 0)
             {
-                TaskDialog.Show("Print Set From Selection",
+                TaskDialog.Show(Title,
                     "Select one or more views or sheets in the Project Browser first.");
                 return Result.Cancelled;
             }
@@ -50,7 +57,7 @@ namespace IssueBuddy
             name = name.Trim();
             if (string.IsNullOrWhiteSpace(name))
             {
-                TaskDialog.Show("Print Set From Selection", "Name cannot be empty.");
+                TaskDialog.Show(Title, "Name cannot be empty.");
                 return Result.Cancelled;
             }
 
@@ -62,7 +69,7 @@ namespace IssueBuddy
 
             if (nameTaken)
             {
-                TaskDialog.Show("Print Set From Selection",
+                TaskDialog.Show(Title,
                     $"A print set named \"{name}\" already exists. Please choose a different name.");
                 return Result.Cancelled;
             }
@@ -92,8 +99,8 @@ namespace IssueBuddy
             }
             catch (Exception ex)
             {
-                message = ex.Message;
-                return Result.Failed;
+                CommandGuards.ReportUnexpected(Title, ex);
+                return Result.Cancelled;
             }
 
             // 5. Success dialog with a list of what went in.

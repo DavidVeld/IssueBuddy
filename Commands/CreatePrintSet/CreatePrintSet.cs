@@ -4,27 +4,33 @@ using System.Linq;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
+using IssueBuddy.Common;
 
 namespace IssueBuddy
 {
     [Transaction(TransactionMode.Manual)]
     class CreatePrintSet : IExternalCommand
     {
+        private const string Title = "Create Print Set";
+
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
-            Document doc = commandData.Application.ActiveUIDocument.Document;
+            // ── Entry conditions ─────────────────────────────────────────────
+            // requireModifiable: the command saves a print set, which needs a
+            // transaction — better to say so now than after the user has filled
+            // in the dialog.
+            UIDocument? uidoc = CommandGuards.GetProjectUIDocument(
+                commandData, Title, requireModifiable: true);
 
-            // FIX: Guard statement to prevent running the tool inside the Family Editor environment
-            if (doc.IsFamilyDocument)
-            {
-                TaskDialog.Show(
-                    "Invalid Environment",
-                        "This command can only be run within a Project environment, not within the Family Editor.",
-                    TaskDialogCommonButtons.Ok,
-                    TaskDialogResult.Ok
-                );
+            if (uidoc == null)
                 return Result.Cancelled;
-            }
+
+            Document doc = uidoc.Document;
+
+            // The window lists revisions and the sheets carrying them, so both
+            // have to exist for it to be of any use.
+            if (!CommandGuards.RequireSheets(doc, Title)) return Result.Cancelled;
+            if (!CommandGuards.RequireRevisions(doc, Title)) return Result.Cancelled;
 
             // Show the window — blocks Revit until closed.
             // The window validates name uniqueness before accepting,

@@ -15,6 +15,10 @@ namespace IssueBuddy
             var doc = uidoc?.Document;
             if (doc == null) return false;
 
+            // A family document also has views that report CanBePrinted, but print
+            // sets do not exist there — hide the item rather than let it fail.
+            if (doc.IsFamilyDocument) return false;
+
             var ids = uidoc.Selection.GetElementIds();
             if (ids == null || ids.Count == 0) return false;
 

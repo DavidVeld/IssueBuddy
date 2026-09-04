@@ -25,8 +25,8 @@
 
     <AssemblyName>IssueBuddy</AssemblyName>
     <RootNamespace>IssueBuddy</RootNamespace>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyVersion>1.0.1.0</AssemblyVersion>
+    <FileVersion>1.0.1.0</FileVersion>
     <Company>David Veld</Company>
     <Authors>David Veld</Authors>
     <Description>IssueBuddy Tools Revit Add-in</Description>

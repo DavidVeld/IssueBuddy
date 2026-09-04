@@ -5,6 +5,7 @@ using System.Windows.Interop;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
+using IssueBuddy.Common;
 
 namespace IssueBuddy
 {
@@ -21,27 +22,29 @@ namespace IssueBuddy
     [Regeneration(RegenerationOption.Manual)]
     public class PDFSplitterCommand : IExternalCommand
     {
+        private const string Title = "PDF Splitter";
+
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
             try
             {
+                // ── Entry conditions ─────────────────────────────────────────
+                // Read-only is fine: the splitter writes PDFs and DWGs to disk,
+                // it does not modify the model.
+                UIDocument? uidoc = CommandGuards.GetProjectUIDocument(commandData, Title);
+                if (uidoc == null)
+                    return Result.Cancelled;
+
                 UIApplication uiapp = commandData.Application;
-                UIDocument uidoc = uiapp.ActiveUIDocument;
                 Document doc = uidoc.Document;
 
-                // FIX: Guard statement to prevent running the tool inside the Family Editor environment
-                if (doc.IsFamilyDocument)
-                {
-                    TaskDialog.Show(
-                        "Invalid Environment",
-                        "This command can only be run within a Project environment, not within the Family Editor.",
-                        TaskDialogCommonButtons.Ok,
-                        TaskDialogResult.Ok
-                    );
+                if (!CommandGuards.RequireSheets(doc, Title))
                     return Result.Cancelled;
-                }
 
                 // ── Find a sample sheet for parameter discovery + preview ───
+                // Null whenever the active view is anything other than a sheet —
+                // a schedule, a 3D view, a legend — so fall back to the first
+                // sheet in the project rather than failing.
                 ViewSheet sampleSheet = uidoc.ActiveView as ViewSheet;
 
                 if (sampleSheet == null)
@@ -49,15 +52,19 @@ namespace IssueBuddy
                     sampleSheet = new FilteredElementCollector(doc)
                         .OfClass(typeof(ViewSheet))
                         .Cast<ViewSheet>()
-                        .Where(s => !s.IsTemplate)
+                        .Where(s => !s.IsPlaceholder)
                         .OrderBy(s => s.SheetNumber)
                         .FirstOrDefault();
                 }
 
+                // Unreachable in practice — RequireSheets applies the same filter.
+                // Kept so a future change to either query cannot produce a silent
+                // failure further down.
                 if (sampleSheet == null)
                 {
-                    TaskDialog.Show("PDF Splitter",
-                        "This project contains no sheets — there is nothing to split against.");
+                    TaskDialog.Show(Title,
+                        "No usable sheet could be found in this project, so the file " +
+                        "name templates cannot be built.");
                     return Result.Cancelled;
                 }
 
@@ -116,8 +123,10 @@ namespace IssueBuddy
             }
             catch (Exception ex)
             {
-                message = ex.Message;
-                return Result.Failed;
+                // Handled here rather than via Result.Failed so the user sees an
+                // explanation instead of Revit's raw "Command Failure" box.
+                CommandGuards.ReportUnexpected(Title, ex);
+                return Result.Cancelled;
             }
         }
     }

@@ -5,6 +5,7 @@ using System.Windows.Interop;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
+using IssueBuddy.Common;
 
 namespace IssueBuddy
 {
@@ -16,29 +17,26 @@ namespace IssueBuddy
     [Regeneration(RegenerationOption.Manual)]
     public class RevisionViewerCommand : IExternalCommand
     {
+        private const string Title = "Revision Viewer";
+
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
             try
             {
+                // ── Entry conditions ─────────────────────────────────────────
+                // Read-only is fine: the viewer only reads the model and exports
+                // to CSV, so it never opens a transaction.
+                UIDocument? uidoc = CommandGuards.GetProjectUIDocument(commandData, Title);
+                if (uidoc == null)
+                    return Result.Cancelled;
+
                 UIApplication uiapp = commandData.Application;
-                UIDocument uidoc = uiapp.ActiveUIDocument;
-
-                // If there is no active document open at all, abort gracefully
-                if (uidoc == null) return Result.Cancelled;
-
                 Document doc = uidoc.Document;
 
-                // FIX: Guard statement to prevent running the tool inside the Family Editor environment
-                if (doc.IsFamilyDocument)
-                {
-                    TaskDialog.Show(
-                        "Invalid Environment",
-                        "This command can only be run within a Project environment, not within the Family Editor.",
-                        TaskDialogCommonButtons.Ok,
-                        TaskDialogResult.Ok
-                    );
+                // The window is a sheet-by-revision matrix — with no sheets there
+                // is nothing to draw.
+                if (!CommandGuards.RequireSheets(doc, Title))
                     return Result.Cancelled;
-                }
 
                 RevisionViewer window = new RevisionViewer();
 
@@ -57,8 +55,10 @@ namespace IssueBuddy
             }
             catch (Exception ex)
             {
-                message = ex.Message;
-                return Result.Failed;
+                // Handled here rather than via Result.Failed so the user sees an
+                // explanation instead of Revit's raw "Command Failure" box.
+                CommandGuards.ReportUnexpected(Title, ex);
+                return Result.Cancelled;
             }
         }
     }

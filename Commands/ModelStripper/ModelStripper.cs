@@ -1,6 +1,7 @@
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
+using IssueBuddy.Common;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -12,27 +13,21 @@ namespace IssueBuddy
     [Transaction(TransactionMode.Manual)]
     class ModelStripper : IExternalCommand
     {
+        private const string Title = "Model Stripper";
+
         // Window is created fresh each Execute call — do NOT instantiate at field level,
         // as a class-level instance is constructed before commandData is available.
         private ModelStripperWindow _window;
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
-            UIApplication app = commandData.Application;
-            UIDocument uidoc = app.ActiveUIDocument;
-            Document doc = uidoc.Document;
-
-            // Guard statement to prevent running the tool inside the Family Editor environment
-            if (doc.IsFamilyDocument)
-            {
-                TaskDialog.Show(
-                    "Invalid Environment",
-                        "This command can only be run within a Project environment, not within the Family Editor.",
-                    TaskDialogCommonButtons.Ok,
-                    TaskDialogResult.Ok
-                );
+            // ── Guard: no document open / Family Editor ──────────────────────────
+            UIDocument? uidoc = CommandGuards.GetProjectUIDocument(commandData, Title);
+            if (uidoc == null)
                 return Result.Cancelled;
-            }
+
+            UIApplication app = commandData.Application;
+            Document doc = uidoc.Document;
 
             // ── Guard: read-only document ────────────────────────────────────────
             // Check both the Revit API flag and the file system — a file can be
@@ -72,16 +67,6 @@ namespace IssueBuddy
                 {
                     // Path may be a BIM360/ACC path that FileInfo cannot resolve — skip this check
                 }
-            }
-
-            // ── Guard: family editor ─────────────────────────────────────────────
-            if (doc.IsFamilyDocument)
-            {
-                MessageBox.Show(
-                    "Model Stripper cannot run while a Family is open for editing.\n\n" +
-                    "Please close the family editor and run this tool from a project document.",
-                    "Not Available", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return Result.Cancelled;
             }
 
             // ── Guard: model has never been saved ────────────────────────────────
@@ -296,8 +281,7 @@ namespace IssueBuddy
             // ── Strip the copy ────────────────────────────────────────────────
             StripAllViews(uidocNew, copyAnchor3DId, copyAnchorSheetId);
 
-            if (_window.chk_UnlinkRvt.IsChecked == true)
-                RemoveTheLinks(uidocNew);
+            RemoveExternalReferences(uidocNew);
 
             // ── Save the stripped copy ────────────────────────────────────────
             try
@@ -413,13 +397,16 @@ namespace IssueBuddy
             var owners = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
             // We sample the view and workset-bearing elements — a full model scan
-            // would be too slow, so we check Views, Sheets, Groups, and RevitLinkTypes
-            // which are the elements this tool actually tries to delete.
+            // would be too slow, so we check the classes this tool actually tries
+            // to delete: views and sheets, groups, and the external reference types.
             var elementsToCheck = new FilteredElementCollector(doc)
                 .WherePasses(new LogicalOrFilter(new List<ElementFilter>
                 {
                     new ElementClassFilter(typeof(Autodesk.Revit.DB.View)),
                     new ElementClassFilter(typeof(RevitLinkType)),
+                    new ElementClassFilter(typeof(CADLinkType)),
+                    new ElementClassFilter(typeof(ImageType)),
+                    new ElementClassFilter(typeof(PointCloudType)),
                     new ElementClassFilter(typeof(Group))
                 }))
                 .ToElementIds();
@@ -590,6 +577,20 @@ namespace IssueBuddy
                     ProtectView(doc, id, protectedIds);
             }
 
+            // Titleblock revision schedules are the tables that render the revision
+            // history on a sheet. They live inside the titleblock family rather than
+            // the Project Browser, but collectors still return them — so without
+            // this they land in the delete set and the revision history goes with
+            // them. Protected here rather than in the schedules branch below so they
+            // are safe whichever checkbox would otherwise have caught them.
+            var revisionScheduleIds = allViews
+                .OfType<ViewSchedule>()
+                .Where(vs => vs.IsTitleblockRevisionSchedule)
+                .Select(vs => vs.Id);
+
+            foreach (var id in revisionScheduleIds)
+                ProtectView(doc, id, protectedIds);
+
             var toDelete = new List<ElementId>();
 
             foreach (var view in allViews)
@@ -610,19 +611,11 @@ namespace IssueBuddy
                         view.ViewType == ViewType.Legend)
                         toDelete.Add(view.Id);
 
+                    // Titleblock revision schedules are already in protectedIds and
+                    // were skipped at the top of the loop.
                     if (_window.chk_StripSchedules.IsChecked == true &&
                         view.ViewType == ViewType.Schedule)
-                    {
-                        // Revision schedules share ViewType.Schedule but belong to
-                        // OST_RevisionClouds category — always keep them so the
-                        // revision history is preserved in the stripped model.
-                        bool isRevisionSchedule =
-                            view.Category?.Id.Value ==
-                            (long)BuiltInCategory.OST_RevisionClouds;
-
-                        if (!isRevisionSchedule)
-                            toDelete.Add(view.Id);
-                    }
+                        toDelete.Add(view.Id);
                 }
                 else
                 {
@@ -694,34 +687,110 @@ namespace IssueBuddy
             vt == ViewType.Walkthrough;
 
         // ════════════════════════════════════════════════════════════════════════
-        // Remove Revit links — operates on the COPY document
+        // Remove external references — operates on the COPY document
+        //
+        // Deleting the *type* takes every placed instance with it, so each group
+        // below collects types only. Each group runs in its own transaction: a
+        // category Revit refuses to delete then fails on its own rather than
+        // rolling back the ones that did work.
+        //
+        // Purge does not cover any of this — a placed image or DWG is "in use",
+        // so it survives a purge no matter how many passes are run.
         // ════════════════════════════════════════════════════════════════════════
-        private void RemoveTheLinks(UIDocument uidoc)
+        private void RemoveExternalReferences(UIDocument uidoc)
         {
             Document doc = uidoc.Document;
+            var errors = new StringBuilder();
+
+            if (_window.chk_UnlinkRvt.IsChecked == true)
+            {
+                // Nested links come out with their parent — deleting them directly throws.
+                var ids = new FilteredElementCollector(doc)
+                    .OfClass(typeof(RevitLinkType))
+                    .Cast<RevitLinkType>()
+                    .Where(r => !r.IsNestedLink)
+                    .Select(r => r.Id)
+                    .ToList();
+
+                DeleteAll(doc, "Delete Revit Links", ids, errors);
+            }
+
+            if (_window.chk_UnlinkCad.IsChecked == true)
+            {
+                // CADLinkType covers DWG / DXF / DGN / SAT / SKP, and covers both
+                // linked and imported geometry — an ImportInstance points at a
+                // CADLinkType just as a linked instance does.
+                var ids = new FilteredElementCollector(doc)
+                    .OfClass(typeof(CADLinkType))
+                    .ToElementIds()
+                    .ToList();
+
+                DeleteAll(doc, "Delete CAD Links and Imports", ids, errors);
+            }
+
+            if (_window.chk_RemoveImages.IsChecked == true)
+            {
+                // ImageType covers raster images and PDFs alike — Revit stores a
+                // linked or imported PDF page as an image type.
+                var ids = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ImageType))
+                    .ToElementIds()
+                    .ToList();
+
+                DeleteAll(doc, "Delete Images and PDFs", ids, errors);
+            }
+
+            if (_window.chk_RemovePointClouds.IsChecked == true)
+            {
+                var ids = new FilteredElementCollector(doc)
+                    .OfClass(typeof(PointCloudType))
+                    .ToElementIds()
+                    .ToList();
+
+                DeleteAll(doc, "Delete Point Clouds", ids, errors);
+            }
+
+            if (_window.chk_RemoveCoordModels.IsChecked == true)
+            {
+                // Coordination models (NWD/NWC) have no public class of their own,
+                // so they are picked up by category. Instances and types are both
+                // collected — Delete tolerates an instance whose type went first.
+                var ids = new FilteredElementCollector(doc)
+                    .OfCategory(BuiltInCategory.OST_Coordination_Model)
+                    .ToElementIds()
+                    .ToList();
+
+                DeleteAll(doc, "Delete Coordination Models", ids, errors);
+            }
+
+            if (errors.Length > 0)
+            {
+                MessageBox.Show(
+                    "Some external references could not be removed:\n\n" + errors +
+                    "\nEverything else was stripped as requested.",
+                    "Remove References", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        // Delete one group of elements in its own transaction. Failures are
+        // collected rather than thrown so the remaining groups still run.
+        private static void DeleteAll(Document doc, string transactionName,
+                                      IList<ElementId> ids, StringBuilder errors)
+        {
+            if (ids.Count == 0) return;
+
             try
             {
-                using (var t = new Transaction(doc, "Delete Revit Links"))
+                using (var t = new Transaction(doc, transactionName))
                 {
                     t.Start();
-
-                    var ids = new FilteredElementCollector(doc)
-                        .OfClass(typeof(RevitLinkType))
-                        .Cast<RevitLinkType>()
-                        .Where(r => !r.IsNestedLink)
-                        .Select(r => r.Id)
-                        .ToList();
-
-                    if (ids.Count > 0)
-                        doc.Delete(ids);
-
+                    doc.Delete(ids);
                     t.Commit();
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Remove links error:\n\n" + ex.Message,
-                    "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                errors.AppendLine($"  • {transactionName}: {ex.Message}");
             }
         }
     }
