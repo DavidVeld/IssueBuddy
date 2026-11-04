@@ -2,12 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Xml;
 using System.Xml.Serialization;
 
 namespace IssueBuddy
 {
     /// <summary>
-    /// One saved file-name preset.
+    /// One saved file-name preset. Each preset is its own XML file, so presets
+    /// can be shared, exported and imported without touching anyone else's.
     /// </summary>
     [Serializable]
     public class FileNameTemplate
@@ -16,57 +18,47 @@ namespace IssueBuddy
 
         public List<ParameterClass> Items { get; set; }
 
+        /// <summary>File this preset was read from (not serialised).</summary>
+        [XmlIgnore]
+        public string FilePath { get; set; } = "";
+
+        /// <summary>True when it lives in the shared (server) folder.</summary>
+        [XmlIgnore]
+        public bool IsShared { get; set; }
+
         public FileNameTemplate()
         {
             Name = "";
             Items = new List<ParameterClass>();
         }
+
+        // The editable ComboBox shows and matches on this.
+        public override string ToString() => Name;
     }
 
     /// <summary>
-    /// All saved file-name presets, persisted as readable XML at:
-    ///   %AppData%\IssueBuddy\FileNameTemplates.xml
+    /// Preset storage.
     ///
-    /// Design note — why this fixes the old "save needs a reload" bug:
-    /// The old implementation re-deserialised the XML file immediately after
-    /// saving, and the window then replaced its bound ObservableCollection
-    /// with a brand-new (empty) one without rebinding the ListView. The UI
-    /// kept showing the orphaned old collection while edits went into the
-    /// hidden new one — hence everything only looked right after a restart.
+    ///   Local:  &lt;IssueBuddy.dll folder&gt;\Templates\&lt;name&gt;.xml
+    ///   Shared: any folder set in settings.ini  [Templates] SharedFolder=
     ///
-    /// Here the in-memory collection is the single source of truth:
-    /// Save() writes the current state to disk and never re-reads it, and
-    /// the window mutates one ObservableCollection in place instead of
-    /// swapping instances.
+    /// The class itself is the OLD combined format (root &lt;FileNameTemplates&gt;),
+    /// kept only so legacy FileNameTemplates.xml files can be imported and
+    /// exploded into single files. The legacy file next to the DLL is migrated
+    /// once — when the Templates folder does not exist yet — and ignored after.
     /// </summary>
     [Serializable]
     [XmlRoot("FileNameTemplates")]
     public class FileNameTemplateCollection
     {
-        public List<FileNameTemplate> Templates { get; set; }
+        public List<FileNameTemplate> Templates { get; set; } = new List<FileNameTemplate>();
 
-        /// <summary>Name of the preset last used, restored on next launch.</summary>
-        public string LastUsed { get; set; }
+        // ── Locations ──────────────────────────────────────────────────────
 
-        public FileNameTemplateCollection()
-        {
-            Templates = new List<FileNameTemplate>();
-            LastUsed = "";
-        }
-
-        // ── Storage location ───────────────────────────────────────────────
-        //
-        // Stored next to the IssueBuddy DLL itself, e.g.
-        //   %AppData%\Autodesk\Revit\Addins\<version>\IssueBuddy\FileNameTemplates.xml
-        // Per-machine, per-Revit-version. Standard Revit addins live under
-        // the user's AppData so writes are always permitted.
-
-        private static string StorageFolder
+        private static string DllFolder
         {
             get
             {
-                // Assembly.Location is the DLL on disk; CodeBase handles the
-                // shadow-copy case some hosts use. Either way → DLL directory.
                 System.Reflection.Assembly asm = typeof(FileNameTemplateCollection).Assembly;
                 string asmPath = !string.IsNullOrEmpty(asm.Location)
                     ? asm.Location
@@ -76,132 +68,166 @@ namespace IssueBuddy
             }
         }
 
-        private static string StoragePath
+        public static string LocalFolder => Path.Combine(DllFolder, "Templates");
+
+        private static string LegacyPath => Path.Combine(DllFolder, "FileNameTemplates.xml");
+
+        private static readonly string[] ValidTypes = { "ProjectInfo", "ViewSheet", "Separator" };
+
+        /// <summary>File path a preset called <paramref name="name"/> gets in <paramref name="folder"/>.</summary>
+        public static string PathFor(string folder, string name)
         {
-            get { return Path.Combine(StorageFolder, "FileNameTemplates.xml"); }
+            string safe = string.Concat(name.Trim().Select(
+                c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+            return Path.Combine(folder, safe + ".xml");
         }
 
-        // ── Load / Save ────────────────────────────────────────────────────
+        // ── Load ───────────────────────────────────────────────────────────
 
         /// <summary>
-        /// Loads the collection from disk. Never throws: a missing or corrupt
-        /// file returns an empty collection so the tool always opens.
+        /// Local presets, migrating the old combined file first if needed.
+        /// Never throws — unreadable files are skipped so the tool always opens.
         /// </summary>
-        public static FileNameTemplateCollection Load()
+        public static List<FileNameTemplate> LoadLocal()
+        {
+            MigrateLegacy();
+            return ReadFolder(LocalFolder, false);
+        }
+
+        /// <summary>
+        /// Shared presets. Never throws, but an unreachable server blocks for the
+        /// network timeout (~40 s measured) — call it off the UI thread.
+        /// </summary>
+        public static List<FileNameTemplate> LoadShared(string folder)
+        {
+            return string.IsNullOrWhiteSpace(folder)
+                ? new List<FileNameTemplate>()
+                : ReadFolder(folder, true);
+        }
+
+        private static List<FileNameTemplate> ReadFolder(string folder, bool isShared)
+        {
+            var result = new List<FileNameTemplate>();
+            try
+            {
+                if (!Directory.Exists(folder))
+                    return result;
+
+                foreach (string file in Directory.GetFiles(folder, "*.xml"))
+                {
+                    try
+                    {
+                        // Only single-preset files count; a stray combined file is not a preset.
+                        FileNameTemplate t = ReadFile(file).SingleOrDefault();
+                        if (t == null) continue;
+                        t.FilePath = file;
+                        t.IsShared = isShared;
+                        result.Add(t);
+                    }
+                    catch { /* not a preset — skip */ }
+                }
+            }
+            catch { /* folder unreachable (e.g. server offline) */ }
+
+            return result.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        /// <summary>
+        /// Reads a single-preset file or a legacy combined file. Throws
+        /// <see cref="InvalidDataException"/> when the file is neither, or
+        /// holds no valid preset.
+        /// </summary>
+        public static List<FileNameTemplate> ReadFile(string path)
+        {
+            List<FileNameTemplate> list;
+
+            // XmlReader.Create prohibits DTDs by default (no XXE from imported files).
+            using (XmlReader reader = XmlReader.Create(path))
+            {
+                var single = new XmlSerializer(typeof(FileNameTemplate));
+                var combined = new XmlSerializer(typeof(FileNameTemplateCollection));
+
+                if (single.CanDeserialize(reader))
+                {
+                    var t = (FileNameTemplate)single.Deserialize(reader);
+                    if (string.IsNullOrWhiteSpace(t.Name))
+                        t.Name = Path.GetFileNameWithoutExtension(path);
+                    list = new List<FileNameTemplate> { t };
+                }
+                else if (combined.CanDeserialize(reader))
+                {
+                    list = ((FileNameTemplateCollection)combined.Deserialize(reader)).Templates
+                           ?? new List<FileNameTemplate>();
+                }
+                else
+                {
+                    throw new InvalidDataException("Not an IssueBuddy file-name template.");
+                }
+            }
+
+            list = list.Where(IsValid).ToList();
+            if (list.Count == 0)
+                throw new InvalidDataException("The file holds no valid file-name template.");
+
+            foreach (FileNameTemplate t in list)
+                t.Name = t.Name.Trim();
+            return list;
+        }
+
+        private static bool IsValid(FileNameTemplate t)
+        {
+            return t != null
+                && !string.IsNullOrWhiteSpace(t.Name)
+                && t.Items != null && t.Items.Count > 0
+                && t.Items.All(i => i != null && ValidTypes.Contains(i.TypeName));
+        }
+
+        /// <summary>
+        /// First run of the per-file storage: explode the old combined file
+        /// into the new Templates folder. After that the old file is ignored.
+        /// </summary>
+        private static void MigrateLegacy()
         {
             try
             {
-                if (!File.Exists(StoragePath))
-                    return new FileNameTemplateCollection();
+                if (Directory.Exists(LocalFolder))
+                    return;
 
-                XmlSerializer serializer = new XmlSerializer(typeof(FileNameTemplateCollection));
-                using (FileStream fs = new FileStream(StoragePath, FileMode.Open, FileAccess.Read))
-                {
-                    FileNameTemplateCollection result = serializer.Deserialize(fs) as FileNameTemplateCollection;
-                    if (result == null)
-                        return new FileNameTemplateCollection();
-
-                    if (result.Templates == null)
-                        result.Templates = new List<FileNameTemplate>();
-
-                    return result;
-                }
+                Directory.CreateDirectory(LocalFolder);
+                if (File.Exists(LegacyPath))
+                    foreach (FileNameTemplate t in ReadFile(LegacyPath))
+                        Write(t, PathFor(LocalFolder, t.Name));
             }
             catch
             {
-                return new FileNameTemplateCollection();
+                // Legacy file unreadable — the user can still Import it by hand.
             }
         }
 
-        /// <summary>
-        /// Persists THIS instance to disk. The caller's in-memory state is
-        /// already correct — nothing needs to be re-read afterwards.
-        /// </summary>
-        public bool Save(out string error)
-        {
-            error = "";
-            try
-            {
-                if (!Directory.Exists(StorageFolder))
-                    Directory.CreateDirectory(StorageFolder);
+        // ── Write / delete ─────────────────────────────────────────────────
 
-                XmlSerializer serializer = new XmlSerializer(typeof(FileNameTemplateCollection));
-                using (FileStream fs = new FileStream(StoragePath, FileMode.Create, FileAccess.Write))
-                {
-                    serializer.Serialize(fs, this);
-                }
-                return true;
-            }
-            catch (Exception ex)
+        /// <summary>Writes one preset as a single-preset XML file.</summary>
+        public static void Write(FileNameTemplate template, string path)
+        {
+            string folder = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(folder) && !Directory.Exists(folder))
+                Directory.CreateDirectory(folder);
+
+            var copy = new FileNameTemplate
             {
-                error = ex.Message;
-                return false;
-            }
+                Name = template.Name.Trim(),
+                Items = template.Items.Select(i => i.Clone()).ToList()
+            };
+
+            var serializer = new XmlSerializer(typeof(FileNameTemplate));
+            using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write))
+                serializer.Serialize(fs, copy);
         }
 
-        // ── Operations ─────────────────────────────────────────────────────
-
-        public FileNameTemplate Get(string name)
+        public static void Delete(FileNameTemplate template)
         {
-            if (string.IsNullOrWhiteSpace(name))
-                return null;
-
-            return Templates.FirstOrDefault(
-                t => string.Equals(t.Name, name.Trim(), StringComparison.OrdinalIgnoreCase));
-        }
-
-        public bool Exists(string name)
-        {
-            return Get(name) != null;
-        }
-
-        /// <summary>
-        /// Adds a new preset or overwrites an existing one with deep copies
-        /// of the supplied items, then persists.
-        /// </summary>
-        public bool AddOrUpdate(string name, IEnumerable<ParameterClass> items, out string error)
-        {
-            error = "";
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                error = "The preset needs a name.";
-                return false;
-            }
-
-            string trimmed = name.Trim();
-            List<ParameterClass> copy = items != null
-                ? items.Select(i => i.Clone()).ToList()
-                : new List<ParameterClass>();
-
-            FileNameTemplate existing = Get(trimmed);
-            if (existing != null)
-            {
-                existing.Items = copy;
-            }
-            else
-            {
-                Templates.Add(new FileNameTemplate { Name = trimmed, Items = copy });
-            }
-
-            LastUsed = trimmed;
-            return Save(out error);
-        }
-
-        public bool Delete(string name, out string error)
-        {
-            error = "";
-            FileNameTemplate existing = Get(name);
-            if (existing == null)
-            {
-                error = "Preset '" + name + "' was not found.";
-                return false;
-            }
-
-            Templates.Remove(existing);
-            if (string.Equals(LastUsed, existing.Name, StringComparison.OrdinalIgnoreCase))
-                LastUsed = "";
-
-            return Save(out error);
+            if (File.Exists(template.FilePath))
+                File.Delete(template.FilePath);
         }
     }
 }

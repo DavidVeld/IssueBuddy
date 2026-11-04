@@ -26,6 +26,7 @@
         <SolidColorBrush x:Key="SubtleBrush"        Color="#555555"/>
         <SolidColorBrush x:Key="FaintBrush"         Color="#FAFAFA"/>
         <SolidColorBrush x:Key="ReadOnlyBrush"      Color="#F3F3F3"/>
+        <SolidColorBrush x:Key="SharedBrush"        Color="#1F5FAD"/>
 
         <!-- TextBox -->
         <Style TargetType="TextBox">
@@ -269,7 +270,7 @@
                               Margin="16,0,0,0"/>
                     <CheckBox x:Name="chx_SeparateFolders"
                               Content="Export PDFs and DWGs to separate sub-folders (\PDF and \DWG)"
-                              IsChecked="False"
+                              IsChecked="True"
                               Margin="16,0,0,0"
                               ToolTip="Creates 'PDF' and 'DWG' sub-folders next to the source PDF (or under the chosen DWG path) and sorts outputs into them."/>
                 </StackPanel>
@@ -397,21 +398,45 @@
                 <ComboBox Grid.Row="0" Grid.Column="1"
                           x:Name="cbb_Templates"
                           IsEditable="True"
-                          ToolTip="Pick a saved preset, or type a new name and press Save"
-                          SelectionChanged="cbb_Templates_SelectionChanged"/>
-                <Button   Grid.Row="0" Grid.Column="3" Grid.ColumnSpan="3"
-                          x:Name="btn_SaveTemplate"
-                          Content="Save"
-                          ToolTip="Save the current template under the name in the box"
-                          Style="{StaticResource IconButtonStyle}"
-                          Width="45" Padding="8,0" Margin="0,0,0,0" HorizontalAlignment="Left"
-                          Click="btn_SaveTemplate_Click"/>
-                <Button   Grid.Row="0" Grid.Column="3" Grid.ColumnSpan="3"
-                          x:Name="btn_Delete"
-                          Content="Delete"
-                          ToolTip="Delete the selected preset"
-                          Style="{StaticResource IconButtonStyle}"
-                          Click="btn_Delete_Click" HorizontalAlignment="Left"  Width="45" Margin="50,0,0,0"/>
+                          ToolTip="Pick a preset, or type a new name and press Save. Blue = shared preset."
+                          SelectionChanged="cbb_Templates_SelectionChanged">
+                    <ComboBox.ItemContainerStyle>
+                        <Style TargetType="ComboBoxItem">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsShared}" Value="True">
+                                    <Setter Property="Foreground" Value="{StaticResource SharedBrush}"/>
+                                    <Setter Property="ToolTip"    Value="{Binding FilePath}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ComboBox.ItemContainerStyle>
+                </ComboBox>
+                <StackPanel Grid.Row="0" Grid.Column="3" Grid.ColumnSpan="9" Orientation="Horizontal">
+                    <StackPanel.Resources>
+                        <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                            <Setter Property="Width"   Value="Auto"/>
+                            <Setter Property="Padding" Value="8,0"/>
+                            <Setter Property="Margin"  Value="0,0,4,0"/>
+                        </Style>
+                    </StackPanel.Resources>
+                    <Button x:Name="btn_SaveTemplate" Content="Save"
+                            ToolTip="Save the current template to your local presets under the name in the box"
+                            Click="btn_SaveTemplate_Click"/>
+                    <Button x:Name="btn_Delete" Content="Delete"
+                            ToolTip="Delete the selected local preset"
+                            Click="btn_Delete_Click"/>
+                    <Button x:Name="btn_ImportTemplate" Content="Import…"
+                            ToolTip="Copy preset files into your local presets (an old FileNameTemplates.xml is split into one file per preset)"
+                            Click="btn_ImportTemplate_Click"/>
+                    <Button x:Name="btn_ExportTemplate" Content="Export…"
+                            ToolTip="Save the current template as a preset file anywhere"
+                            Click="btn_ExportTemplate_Click"/>
+                    <Button x:Name="btn_PublishTemplate" Content="Publish"
+                            ToolTip="Publish the current template to the shared folder so others see it"
+                            Click="btn_PublishTemplate_Click"/>
+                    <Button x:Name="btn_SharedFolder" Content="Shared folder…"
+                            Click="btn_SharedFolder_Click"/>
+                </StackPanel>
 
                 <!-- Parameters list  |  arrow  |  Template result list -->
                 <Label Grid.Row="2" Grid.Column="0"

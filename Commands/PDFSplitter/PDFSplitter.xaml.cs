@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -16,6 +17,8 @@ using PdfSharp.Pdf.IO;
 using Path = System.IO.Path;
 using View = Autodesk.Revit.DB.View;
 using Visibility = System.Windows.Visibility;
+// Autodesk.Revit.DB has its own Settings class.
+using AppSettings = IssueBuddy.Common.Settings;
 
 namespace IssueBuddy
 {
@@ -55,8 +58,9 @@ namespace IssueBuddy
         private readonly ObservableCollection<ParameterClass> selectedNameTemplate
             = new ObservableCollection<ParameterClass>();
 
-        /// <summary>All saved presets (in-memory source of truth).</summary>
-        private FileNameTemplateCollection templateStore;
+        /// <summary>Presets as last read from disk. Shared ones load in the background.</summary>
+        private List<FileNameTemplate> localTemplates = new List<FileNameTemplate>();
+        private List<FileNameTemplate> sharedTemplates = new List<FileNameTemplate>();
 
         /// <summary>Suppresses SelectionChanged while the combo is repopulated.</summary>
         private bool suppressTemplateEvents;
@@ -107,9 +111,11 @@ namespace IssueBuddy
                 // Bind the template editor ONCE; afterwards only mutate it.
                 lib_name.ItemsSource = selectedNameTemplate;
 
-                // Saved presets
-                templateStore = FileNameTemplateCollection.Load();
-                RepopulateTemplateCombo(templateStore.LastUsed);
+                // Saved presets. Re-read settings: another Revit session may have changed them.
+                AppSettings.Reset();
+                string last = AppSettings.Instance.LastTemplateName;
+                ReloadLocalTemplates(last);
+                LoadSharedTemplatesAsync(last);
 
                 UpdateReadiness();
             }
@@ -182,54 +188,101 @@ namespace IssueBuddy
         }
 
         // ════════════════════════════════════════════════════════════════════
-        //  Template presets — save / load / delete
+        //  Template presets — one XML file per preset
+        //  Local presets live in <dll>\Templates; shared ones in the shared
+        //  (server) folder from settings.ini and show in the SharedBrush colour.
         // ════════════════════════════════════════════════════════════════════
 
-        /// <summary>
-        /// Rebuilds the preset dropdown from the in-memory store and
-        /// optionally selects (and loads) one preset — all without firing
-        /// selection events halfway through.
-        /// </summary>
-        private void RepopulateTemplateCombo(string selectName)
+        private FileNameTemplate FindTemplate(string name, bool shared)
         {
+            string trimmed = (name ?? "").Trim();
+            return (shared ? sharedTemplates : localTemplates).FirstOrDefault(t =>
+                string.Equals(t.Name, trimmed, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Rebuilds the dropdown (local, then shared) and selects
+        /// <paramref name="pick"/> without firing selection events halfway through.
+        /// loadEditor=false leaves the editor and the typed name alone — used when
+        /// shared presets arrive in the background while the user is working.
+        /// </summary>
+        private void FillTemplateCombo(FileNameTemplate pick, bool loadEditor)
+        {
+            string typed = cbb_Templates.Text;
+
             suppressTemplateEvents = true;
             try
             {
                 cbb_Templates.Items.Clear();
-                foreach (FileNameTemplate t in templateStore.Templates.OrderBy(t => t.Name))
-                    cbb_Templates.Items.Add(t.Name);
+                foreach (FileNameTemplate t in localTemplates.Concat(sharedTemplates))
+                    cbb_Templates.Items.Add(t);
 
-                if (!string.IsNullOrWhiteSpace(selectName) && templateStore.Exists(selectName))
-                {
-                    cbb_Templates.SelectedItem = templateStore.Get(selectName).Name;
-                    LoadTemplateIntoEditor(selectName);
-                }
-                else
-                {
-                    cbb_Templates.SelectedIndex = -1;
-                    cbb_Templates.Text = "";
-                }
+                cbb_Templates.SelectedItem = pick;
+                if (pick == null)
+                    cbb_Templates.Text = loadEditor ? "" : typed;
             }
             finally
             {
                 suppressTemplateEvents = false;
             }
+
+            if (pick != null && loadEditor)
+            {
+                LoadTemplateIntoEditor(pick);
+                AppSettings.Instance.LastTemplateName = pick.Name;
+            }
         }
 
         /// <summary>
-        /// Copies a saved preset into the live editor collection
+        /// Re-reads the local folder only (fast) and selects and loads
+        /// <paramref name="selectName"/>, preferring the local or shared copy as asked.
+        /// </summary>
+        private void ReloadLocalTemplates(string selectName, bool preferShared = false)
+        {
+            localTemplates = FileNameTemplateCollection.LoadLocal();
+            FillTemplateCombo(FindTemplate(selectName, preferShared) ?? FindTemplate(selectName, !preferShared),
+                              loadEditor: true);
+        }
+
+        /// <summary>
+        /// Reads the shared folder off the UI thread (an unreachable server
+        /// would freeze Revit for the network timeout), then merges it in.
+        /// <paramref name="selectName"/> is selected only if the user has not
+        /// picked or typed anything in the meantime.
+        /// </summary>
+        private async void LoadSharedTemplatesAsync(string selectName)
+        {
+            string folder = AppSettings.Instance.SharedTemplateFolder;
+            btn_SharedFolder.ToolTip = "Shared preset folder (its presets show in blue):\n" +
+                (string.IsNullOrWhiteSpace(folder) ? "(not set — click to choose)" : folder);
+
+            List<FileNameTemplate> shared =
+                await Task.Run(() => FileNameTemplateCollection.LoadShared(folder));
+
+            // Window closed, or the folder changed while we waited (that load wins).
+            if (!IsLoaded || folder != AppSettings.Instance.SharedTemplateFolder) return;
+            sharedTemplates = shared;
+
+            var selected = cbb_Templates.SelectedItem as FileNameTemplate;
+            bool untouched = selected == null && string.IsNullOrEmpty(cbb_Templates.Text);
+
+            FileNameTemplate pick =
+                untouched ? FindTemplate(selectName, true)
+                : selected != null && selected.IsShared ? FindTemplate(selected.Name, true)
+                : selected;
+
+            FillTemplateCombo(pick, loadEditor: untouched && pick != null);
+        }
+
+        /// <summary>
+        /// Copies a preset into the live editor collection
         /// (in place — the bound instance is never replaced).
         /// </summary>
-        private void LoadTemplateIntoEditor(string name)
+        private void LoadTemplateIntoEditor(FileNameTemplate template)
         {
-            FileNameTemplate template = templateStore.Get(name);
-
             selectedNameTemplate.Clear();
-            if (template != null)
-            {
-                foreach (ParameterClass item in template.Items)
-                    selectedNameTemplate.Add(item.Clone());
-            }
+            foreach (ParameterClass item in template.Items)
+                selectedNameTemplate.Add(item.Clone());
 
             RefreshSample();
         }
@@ -238,95 +291,258 @@ namespace IssueBuddy
         {
             if (suppressTemplateEvents) return;
 
-            string name = cbb_Templates.SelectedItem as string;
-            if (!string.IsNullOrWhiteSpace(name))
+            if (cbb_Templates.SelectedItem is FileNameTemplate template)
             {
-                LoadTemplateIntoEditor(name);
-                templateStore.LastUsed = name;
+                LoadTemplateIntoEditor(template);
+                AppSettings.Instance.LastTemplateName = template.Name;
             }
         }
 
+        /// <summary>
+        /// The name in the box plus the editor contents, or null (after telling
+        /// the user) when either is missing.
+        /// </summary>
+        private FileNameTemplate CurrentTemplate(string title)
+        {
+            string name = cbb_Templates.Text != null ? cbb_Templates.Text.Trim() : "";
+
+            if (name == "")
+            {
+                System.Windows.MessageBox.Show(this,
+                    "Type a name for the preset in the box first.",
+                    title, MessageBoxButton.OK, MessageBoxImage.Information);
+                return null;
+            }
+
+            if (selectedNameTemplate.Count == 0)
+            {
+                System.Windows.MessageBox.Show(this,
+                    "The template is empty — add at least one parameter first.",
+                    title, MessageBoxButton.OK, MessageBoxImage.Information);
+                return null;
+            }
+
+            return new FileNameTemplate { Name = name, Items = selectedNameTemplate.ToList() };
+        }
+
+        private bool Confirm(string message, string title)
+        {
+            return System.Windows.MessageBox.Show(this, message, title,
+                MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+        }
+
+        private bool TryWrite(FileNameTemplate template, string path, string title)
+        {
+            try
+            {
+                FileNameTemplateCollection.Write(template, path);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show(this,
+                    "Could not write the preset to:\n" + path + "\n\n" + ex.Message,
+                    title, MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
+        }
+
+        /// <summary>Save = create or overwrite the LOCAL preset file.</summary>
         private void btn_SaveTemplate_Click(object sender, RoutedEventArgs e)
         {
-            try
+            FileNameTemplate current = CurrentTemplate("Save Preset");
+            if (current == null) return;
+
+            FileNameTemplate existing = FindTemplate(current.Name, false);
+            string path = existing != null
+                ? existing.FilePath
+                : FileNameTemplateCollection.PathFor(FileNameTemplateCollection.LocalFolder, current.Name);
+
+            if (File.Exists(path) && !Confirm(
+                    "A preset called '" + current.Name + "' already exists.\n\nOverwrite it?", "Save Preset"))
+                return;
+
+            if (TryWrite(current, path, "Save Preset"))
             {
-                string name = cbb_Templates.Text != null ? cbb_Templates.Text.Trim() : "";
-
-                if (name == "")
-                {
-                    System.Windows.MessageBox.Show(
-                        "Type a name for the preset in the box first.",
-                        "Save Preset", MessageBoxButton.OK, MessageBoxImage.Information);
-                    return;
-                }
-
-                if (selectedNameTemplate.Count == 0)
-                {
-                    System.Windows.MessageBox.Show(
-                        "The template is empty — add at least one parameter before saving.",
-                        "Save Preset", MessageBoxButton.OK, MessageBoxImage.Information);
-                    return;
-                }
-
-                if (templateStore.Exists(name))
-                {
-                    MessageBoxResult overwrite = System.Windows.MessageBox.Show(
-                        "A preset called '" + name + "' already exists.\n\nOverwrite it?",
-                        "Save Preset", MessageBoxButton.YesNo, MessageBoxImage.Question);
-
-                    if (overwrite != MessageBoxResult.Yes) return;
-                }
-
-                string error;
-                if (templateStore.AddOrUpdate(name, selectedNameTemplate, out error))
-                {
-                    // The in-memory store is already up to date — just refresh
-                    // the dropdown and reselect. No file re-read, no restart.
-                    RepopulateTemplateCombo(name);
-                    SetStatus("Preset '" + name + "' saved.");
-                }
-                else
-                {
-                    System.Windows.MessageBox.Show(
-                        "Could not save the preset:\n" + error,
-                        "Save Preset", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Windows.MessageBox.Show(ex.Message, "Save Preset");
+                ReloadLocalTemplates(current.Name);
+                SetStatus("Preset '" + current.Name + "' saved.");
             }
         }
 
+        /// <summary>Export = save the current preset as a file anywhere.</summary>
+        private void btn_ExportTemplate_Click(object sender, RoutedEventArgs e)
+        {
+            FileNameTemplate current = CurrentTemplate("Export Preset");
+            if (current == null) return;
+
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Export Preset",
+                Filter = "IssueBuddy preset (*.xml)|*.xml",
+                FileName = Path.GetFileName(FileNameTemplateCollection.PathFor("", current.Name))
+            };
+            if (dialog.ShowDialog(this) != true) return;
+
+            if (TryWrite(current, dialog.FileName, "Export Preset"))
+                SetStatus("Preset '" + current.Name + "' exported to " + dialog.FileName);
+        }
+
+        /// <summary>
+        /// Import = copy valid preset files into the local folder. An old
+        /// combined FileNameTemplates.xml is exploded into one file per preset.
+        /// </summary>
+        private void btn_ImportTemplate_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Import Presets",
+                Filter = "IssueBuddy preset (*.xml)|*.xml",
+                Multiselect = true
+            };
+            if (dialog.ShowDialog(this) != true) return;
+
+            var incoming = new List<FileNameTemplate>();
+            var problems = new List<string>();
+            foreach (string file in dialog.FileNames)
+            {
+                try { incoming.AddRange(FileNameTemplateCollection.ReadFile(file)); }
+                catch (Exception ex) { problems.Add(Path.GetFileName(file) + " — " + ex.Message); }
+            }
+
+            List<string> clashes = incoming
+                .Where(t => FindTemplate(t.Name, false) != null)
+                .Select(t => t.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            bool overwrite = true;
+            if (clashes.Count > 0)
+            {
+                MessageBoxResult answer = System.Windows.MessageBox.Show(this,
+                    "These presets already exist:\n\n  " + string.Join("\n  ", clashes) +
+                    "\n\nYes = overwrite them\nNo = keep yours and import the rest",
+                    "Import Presets", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+
+                if (answer == MessageBoxResult.Cancel) return;
+                overwrite = answer == MessageBoxResult.Yes;
+            }
+
+            var imported = new List<string>();
+            foreach (FileNameTemplate t in incoming)
+            {
+                FileNameTemplate existing = FindTemplate(t.Name, false);
+                if (existing != null && !overwrite) continue;
+
+                try
+                {
+                    FileNameTemplateCollection.Write(t, existing != null
+                        ? existing.FilePath
+                        : FileNameTemplateCollection.PathFor(FileNameTemplateCollection.LocalFolder, t.Name));
+                    imported.Add(t.Name);
+                }
+                catch (Exception ex) { problems.Add(t.Name + " — " + ex.Message); }
+            }
+
+            if (imported.Count > 0)
+                ReloadLocalTemplates(imported[0]);
+
+            string summary = "Imported " + imported.Count + " preset(s).";
+            if (problems.Count > 0)
+                System.Windows.MessageBox.Show(this,
+                    summary + "\n\nNot imported:\n  " + string.Join("\n  ", problems),
+                    "Import Presets", MessageBoxButton.OK, MessageBoxImage.Warning);
+            else
+                SetStatus(summary);
+        }
+
+        /// <summary>Publish = write the current preset into the shared folder.</summary>
+        private void btn_PublishTemplate_Click(object sender, RoutedEventArgs e)
+        {
+            FileNameTemplate current = CurrentTemplate("Publish Preset");
+            if (current == null) return;
+
+            string folder = AppSettings.Instance.SharedTemplateFolder;
+            bool pickedNow = string.IsNullOrWhiteSpace(folder);
+            if (pickedNow)
+            {
+                folder = PickSharedFolder();
+                if (folder == null) return;
+            }
+
+            FileNameTemplate existing = FindTemplate(current.Name, true);
+            string path = existing != null
+                ? existing.FilePath
+                : FileNameTemplateCollection.PathFor(folder, current.Name);
+
+            if (File.Exists(path) && !Confirm(
+                    "A shared preset called '" + current.Name + "' already exists.\n\n" +
+                    "Overwrite it for everyone using the shared folder?", "Publish Preset"))
+                return;
+
+            if (TryWrite(current, path, "Publish Preset"))
+            {
+                // Update the list in memory; re-reading the share here would block the UI.
+                sharedTemplates.RemoveAll(t => string.Equals(t.FilePath, path, StringComparison.OrdinalIgnoreCase));
+                current.FilePath = path;
+                current.IsShared = true;
+                sharedTemplates.Add(current);
+                sharedTemplates.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+                FillTemplateCombo(current, loadEditor: true);
+
+                if (pickedNow)
+                    LoadSharedTemplatesAsync(null);  // show what else is already in the new folder
+
+                SetStatus("Preset '" + current.Name + "' published to " + folder);
+            }
+        }
+
+        private void btn_SharedFolder_Click(object sender, RoutedEventArgs e)
+        {
+            if (PickSharedFolder() != null)
+                LoadSharedTemplatesAsync(null);
+        }
+
+        /// <summary>Asks for the shared folder and stores it; null if cancelled.</summary>
+        private string PickSharedFolder()
+        {
+            string folder = FolderPicker.Show(this,
+                "Choose the shared folder for published presets",
+                AppSettings.Instance.SharedTemplateFolder);
+            if (folder == null) return null;
+
+            AppSettings.Instance.SharedTemplateFolder = folder;
+            AppSettings.Instance.Save();
+            return folder;
+        }
+
+        /// <summary>Delete removes a LOCAL preset file only.</summary>
         private void btn_Delete_Click(object sender, RoutedEventArgs e)
         {
+            var template = cbb_Templates.SelectedItem as FileNameTemplate;
+            if (template == null) return;
+
+            if (template.IsShared)
+            {
+                System.Windows.MessageBox.Show(this,
+                    "'" + template.Name + "' is a shared preset. To remove it for everyone, " +
+                    "delete its file from the shared folder:\n\n" + template.FilePath,
+                    "Delete Preset", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (!Confirm("Delete preset '" + template.Name + "'?", "Delete Preset")) return;
+
             try
             {
-                string name = cbb_Templates.Text != null ? cbb_Templates.Text.Trim() : "";
-                if (name == "" || !templateStore.Exists(name)) return;
-
-                MessageBoxResult confirm = System.Windows.MessageBox.Show(
-                    "Delete preset '" + name + "'?",
-                    "Delete Preset", MessageBoxButton.YesNo, MessageBoxImage.Question);
-
-                if (confirm != MessageBoxResult.Yes) return;
-
-                string error;
-                if (templateStore.Delete(name, out error))
-                {
-                    selectedNameTemplate.Clear();
-                    RepopulateTemplateCombo(null);
-                    RefreshSample();
-                    SetStatus("Preset '" + name + "' deleted.");
-                }
-                else
-                {
-                    System.Windows.MessageBox.Show(error, "Delete Preset");
-                }
+                FileNameTemplateCollection.Delete(template);
+                ReloadLocalTemplates(null);
+                selectedNameTemplate.Clear();
+                RefreshSample();
+                SetStatus("Preset '" + template.Name + "' deleted.");
             }
             catch (Exception ex)
             {
-                System.Windows.MessageBox.Show(ex.Message, "Delete Preset");
+                System.Windows.MessageBox.Show(this, ex.Message, "Delete Preset");
             }
         }
 
@@ -1009,16 +1225,8 @@ namespace IssueBuddy
 
         protected override void OnClosed(EventArgs e)
         {
-            // Remember the last used preset for next time.
-            try
-            {
-                if (templateStore != null)
-                {
-                    string ignore;
-                    templateStore.Save(out ignore);
-                }
-            }
-            catch { /* never block close */ }
+            // Remember the last used preset for next time (Save never throws).
+            AppSettings.Instance.Save();
 
             base.OnClosed(e);
         }

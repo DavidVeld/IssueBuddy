@@ -87,6 +87,12 @@
   </ItemGroup>
 
 
+  <!-- Tests\ holds separate projects; keep their files out of the add-in. -->
+  <ItemGroup>
+    <Compile Remove="Tests\**" />
+    <None Remove="Tests\**" />
+  </ItemGroup>
+
   <!-- ══════════════════════════════════════════
        Embed /img as assembly resources
   ══════════════════════════════════════════ -->
@@ -169,8 +175,9 @@
     <Content Include="IssueBuddy25+.addin">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
+    <!-- PreserveNewest: a build must not reset settings the user changed (e.g. the shared preset folder). -->
     <Content Include="settings.ini">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
 	  
   </ItemGroup>

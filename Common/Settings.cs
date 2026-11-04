@@ -8,7 +8,7 @@ namespace IssueBuddy.Common
     /// Persisted application settings for IssueBuddy.
     /// Stored as a plain INI file alongside the IssueBuddy DLL, e.g.
     ///   %AppData%\Autodesk\Revit\Addins\<version>\IssueBuddy\settings.ini
-    /// One place to clean up (same folder as FileNameTemplates.xml).
+    /// One place to clean up (same folder as the Templates preset folder).
     ///
     /// Format:
     ///   ; comment
@@ -52,6 +52,12 @@ namespace IssueBuddy.Common
         /// <summary>Show confirmation dialogs.</summary>
         public bool ShowConfirmations { get; set; } = true;
 
+        /// <summary>Shared (server) folder for published file-name presets; "" = none.</summary>
+        public string SharedTemplateFolder { get; set; } = string.Empty;
+
+        /// <summary>File-name preset last used in the PDF Splitter.</summary>
+        public string LastTemplateName { get; set; } = string.Empty;
+
         /// <summary>Add-in ribbon panel name.</summary>
         public string RibbonPanelName { get; set; } = "IssueBuddy";
 
@@ -75,6 +81,8 @@ namespace IssueBuddy.Common
                 s.DefaultOutputFolder = ini.Get("General", "DefaultOutputFolder", s.DefaultOutputFolder);
                 s.LastSheetSetName = ini.Get("General", "LastSheetSetName", s.LastSheetSetName);
                 s.ShowConfirmations = ini.GetBool("General", "ShowConfirmations", s.ShowConfirmations);
+                s.SharedTemplateFolder = ini.Get("Templates", "SharedFolder", s.SharedTemplateFolder);
+                s.LastTemplateName = ini.Get("Templates", "LastUsed", s.LastTemplateName);
                 s.RibbonPanelName = ini.Get("UI", "RibbonPanelName", s.RibbonPanelName);
                 s.Version = ini.Get("Meta", "Version", s.Version);
             }
@@ -108,6 +116,10 @@ namespace IssueBuddy.Common
                     $"LastSheetSetName={LastSheetSetName}",
                     $"ShowConfirmations={ShowConfirmations}",
                     "",
+                    "[Templates]",
+                    $"SharedFolder={SharedTemplateFolder}",
+                    $"LastUsed={LastTemplateName}",
+                    "",
                     "[UI]",
                     $"RibbonPanelName={RibbonPanelName}",
                     "",
@@ -123,7 +135,8 @@ namespace IssueBuddy.Common
             }
         }
 
-        // ── Reset (unit tests) ─────────────────────────────────────────────────
+        // ── Reset: next Instance access re-reads the file (another Revit ──────
+        //    session may have changed it). Also used by unit tests.
         public static void Reset() => _instance = null;
 
         // ── INI parser ─────────────────────────────────────────────────────────

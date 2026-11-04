@@ -103,18 +103,10 @@ namespace IssueBuddy
         // ─────────────────────────────────────────────────────────────────────
         public Result OnShutdown(UIControlledApplication application)
         {
-            try
-            {
-                // Persist any settings changes made during the session
-                Settings.Instance.Save();
-                return Result.Succeeded;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine(
-                    $"[IssueBuddy] Shutdown error: {ex.Message}");
-                return Result.Failed;
-            }
+            // No Settings.Save() here: settings are saved where they change. Saving
+            // this session's cached copy on exit would overwrite changes made in
+            // another Revit session that is running at the same time.
+            return Result.Succeeded;
         }
 
         // ─────────────────────────────────────────────────────────────────────
